@@ -4916,6 +4916,10 @@ func (e *executor) createIndex(ctx sessionctx.Context, ti ast.Ident, keyType ast
 	if err != nil {
 		return errors.Trace(err)
 	}
+	if len(indexName.L) == 0 {
+		// It means that there is already an index exists with same name
+		return nil
+	}
 
 	tblInfo := t.Meta()
 	finalColumns := make([]*model.ColumnInfo, len(tblInfo.Columns), len(tblInfo.Columns)+len(hiddenCols))
@@ -6939,15 +6943,6 @@ func (e *executor) DoDDLJobWrapper(ctx sessionctx.Context, jobW *JobWrapper) (re
 		}
 		panic("When the state is JobStateRollbackDone or JobStateCancelled, historyJob.Error should never be nil")
 	}
-}
-
-func getRenameTableUniqueIDs(jobW *JobWrapper, schema bool) []int64 {
-	if !schema {
-		return []int64{jobW.TableID}
-	}
-
-	oldSchemaID := jobW.JobArgs.(*model.RenameTableArgs).OldSchemaID
-	return []int64{oldSchemaID, jobW.SchemaID}
 }
 
 // HandleLockTablesOnSuccessSubmit handles the table lock for the job which is submitted

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package metrics
+package metricscommon
 
 import (
 	"fmt"
@@ -22,6 +22,11 @@ import (
 )
 
 var constLabels prometheus.Labels
+
+// GetConstLabels returns constant labels for metrics.
+func GetConstLabels() prometheus.Labels {
+	return constLabels
+}
 
 // SetConstLabels sets constant labels for metrics.
 func SetConstLabels(kv ...string) {

@@ -15,6 +15,7 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -61,6 +62,7 @@ import (
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/pingcap/tidb/pkg/sessionctx/variable"
 	"github.com/pingcap/tidb/pkg/statistics"
+	"github.com/pingcap/tidb/pkg/statistics/handle"
 	"github.com/pingcap/tidb/pkg/table"
 	"github.com/pingcap/tidb/pkg/table/tables"
 	"github.com/pingcap/tidb/pkg/table/temptable"
@@ -1909,6 +1911,7 @@ func (b *PlanBuilder) buildUnionAll(ctx context.Context, subPlan []base.LogicalP
 	if len(subPlan) == 0 {
 		return nil, nil
 	}
+	b.optFlag |= rule.FlagEliminateUnionAllDualItem
 	u := logicalop.LogicalUnionAll{}.Init(b.ctx, b.getSelectOffset())
 	u.SetChildren(subPlan...)
 	err := b.buildProjection4Union(ctx, u)
@@ -4097,7 +4100,11 @@ func addExtraPhysTblIDColumn4DS(ds *logicalop.DataSource) *expression.Column {
 // 3. statistics is outdated.
 // Note: please also update getLatestVersionFromStatsTable() when logic in this function changes.
 func getStatsTable(ctx base.PlanContext, tblInfo *model.TableInfo, pid int64) *statistics.Table {
-	statsHandle := domain.GetDomain(ctx).StatsHandle()
+	var statsHandle *handle.Handle
+	dom := domain.GetDomain(ctx)
+	if dom != nil {
+		statsHandle = dom.StatsHandle()
+	}
 	var usePartitionStats, countIs0, pseudoStatsForUninitialized, pseudoStatsForOutdated bool
 	var statsTbl *statistics.Table
 	if ctx.GetSessionVars().StmtCtx.EnableOptimizerDebugTrace {
@@ -5269,22 +5276,17 @@ func (t *TblColPosInfo) MemoryUsage() (sum int64) {
 	return
 }
 
+// Cmp compares two TblColPosInfo by their Start field.
+func (t *TblColPosInfo) Cmp(a TblColPosInfo) int {
+	return cmp.Compare(t.Start, a.Start)
+}
+
 // TblColPosInfoSlice attaches the methods of sort.Interface to []TblColPosInfos sorting in increasing order.
 type TblColPosInfoSlice []TblColPosInfo
 
 // Len implements sort.Interface#Len.
 func (c TblColPosInfoSlice) Len() int {
 	return len(c)
-}
-
-// Swap implements sort.Interface#Swap.
-func (c TblColPosInfoSlice) Swap(i, j int) {
-	c[i], c[j] = c[j], c[i]
-}
-
-// Less implements sort.Interface#Less.
-func (c TblColPosInfoSlice) Less(i, j int) bool {
-	return c[i].Start < c[j].Start
 }
 
 // FindTblIdx finds the ordinal of the corresponding access column.
@@ -5321,7 +5323,9 @@ func buildColumns2HandleWithWrtiableColumns(
 			cols2Handles = append(cols2Handles, TblColPosInfo{TblID: tblID, Start: offset, End: end, HandleCols: handleCol})
 		}
 	}
-	sort.Sort(cols2Handles)
+	slices.SortFunc(cols2Handles, func(a, b TblColPosInfo) int {
+		return a.Cmp(b)
+	})
 	return cols2Handles, nil
 }
 
@@ -5363,8 +5367,9 @@ func pruneAndBuildColPositionInfoForDelete(
 		}
 	}
 	// Sort by start position. To do the later column pruning.
-	// TODO: `sort`` package has a rather worse performance. We should replace it with the new `slice` package.
-	sort.Sort(cols2PosInfos)
+	slices.SortFunc(cols2PosInfos, func(a, b TblColPosInfo) int {
+		return a.Cmp(b)
+	})
 	prunedColCnt := 0
 	var err error
 	for i := range cols2PosInfos {

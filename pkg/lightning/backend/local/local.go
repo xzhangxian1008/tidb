@@ -527,8 +527,6 @@ type Backend struct {
 	metrics      *metric.Common
 	writeLimiter StoreWriteLimiter
 	logger       log.Logger
-	// This mutex is used to do some mutual exclusion work in the backend, flushKVs() in writer for now.
-	mu sync.Mutex
 
 	nextgenHTTPCli *http.Client
 }
@@ -828,10 +826,6 @@ func (local *Backend) OpenEngine(ctx context.Context, cfg *backend.EngineConfig,
 // CloseEngine closes backend engine by uuid.
 func (local *Backend) CloseEngine(ctx context.Context, cfg *backend.EngineConfig, engineUUID uuid.UUID) error {
 	return local.engineMgr.closeEngine(ctx, cfg, engineUUID)
-}
-
-func (local *Backend) getImportClient(ctx context.Context, storeID uint64) (sst.ImportSSTClient, error) {
-	return local.importClientFactory.create(ctx, storeID)
 }
 
 func splitRangeBySizeProps(fullRange engineapi.Range, sizeProps *sizeProperties, sizeLimit int64, keysLimit int64) []engineapi.Range {
@@ -1457,11 +1451,13 @@ func (local *Backend) newRegionJobWorker(
 		regenerateJobsFn: local.generateJobForRange,
 	}
 	if kerneltype.IsNextGen() {
+		tlsConfig := local.tls.TLSConfig()
 		if local.nextgenHTTPCli == nil {
-			local.nextgenHTTPCli = util.ClientWithTLS(local.tls.TLSConfig())
+			local.nextgenHTTPCli = util.ClientWithTLS(tlsConfig)
 		}
+		isHTTPS := tlsConfig != nil
 		cloudW := &objStoreRegionJobWorker{
-			ingestCli:      ingestcli.NewClient(local.TiKVWorkerURL, clusterID, local.nextgenHTTPCli, local.splitCli),
+			ingestCli:      ingestcli.NewClient(local.TiKVWorkerURL, clusterID, isHTTPS, local.nextgenHTTPCli, local.splitCli),
 			writeBatchSize: local.KVWriteBatchSize,
 			bufPool:        local.engineMgr.getBufferPool(),
 		}
