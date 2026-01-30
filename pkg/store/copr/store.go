@@ -29,6 +29,7 @@ import (
 	"github.com/tikv/client-go/v2/config"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/async"
 )
 
 type kvStore struct {
@@ -71,6 +72,11 @@ func (c *tikvClient) CloseAddr(addr string) error {
 func (c *tikvClient) SendRequest(ctx context.Context, addr string, req *tikvrpc.Request, timeout time.Duration) (*tikvrpc.Response, error) {
 	res, err := c.c.SendRequest(ctx, addr, req, timeout)
 	return res, derr.ToTiDBErr(err)
+}
+
+// SendRequestAsync implements the interface
+func (c *tikvClient) SendRequestAsync(context.Context, string, *tikvrpc.Request, async.Callback[*tikvrpc.Response]) {
+	panic("Not implemented")
 }
 
 func (c *tikvClient) SetEventListener(listener tikv.ClientEventListener) {

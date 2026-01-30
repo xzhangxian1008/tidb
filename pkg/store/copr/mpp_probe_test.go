@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/async"
 )
 
 const (
@@ -57,6 +58,11 @@ func (t *mockDetectClient) SendRequest(
 	}
 
 	return &tikvrpc.Response{Resp: &mpp.IsAliveResponse{Available: true}}, nil
+}
+
+// SendRequestAsync implements the interface
+func (c *mockDetectClient) SendRequestAsync(context.Context, string, *tikvrpc.Request, async.Callback[*tikvrpc.Response]) {
+	panic("Not implemented")
 }
 
 func (t *mockDetectClient) SetEventListener(_ tikv.ClientEventListener) {}

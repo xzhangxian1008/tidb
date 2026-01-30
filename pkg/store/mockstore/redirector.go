@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/tidb/pkg/config"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
+	"github.com/tikv/client-go/v2/util/async"
 )
 
 type clientRedirector struct {
@@ -38,6 +39,11 @@ func newClientRedirector(mockClient tikv.Client) tikv.Client {
 	return &clientRedirector{
 		mockClient: mockClient,
 	}
+}
+
+// SendRequestAsync implements the interface
+func (c *clientRedirector) SendRequestAsync(context.Context, string, *tikvrpc.Request, async.Callback[*tikvrpc.Response]) {
+	panic("Not implemented")
 }
 
 func (c *clientRedirector) Close() error {
