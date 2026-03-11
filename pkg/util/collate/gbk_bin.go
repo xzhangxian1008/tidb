@@ -102,8 +102,8 @@ func (*gbkBinCollator) Pattern() WildcardPattern {
 }
 
 // ImmutablePrefixKey implements Collator interface
-func (*gbkBinCollator) ImmutablePrefixKey(str string, prefixCharCount int) []byte {
-	return stringutil.GetUtf8SubStringBytes(truncateTailingSpace(str), prefixCharCount)
+func (g *gbkBinCollator) ImmutablePrefixKey(str string, prefixCharCount int) []byte {
+	return g.KeyWithoutTrimRightSpace(string(hack.String(stringutil.GetUtf8SubStringBytes(truncateTailingSpace(str), prefixCharCount))))
 }
 
 // use binPattern directly, they are totally same.
