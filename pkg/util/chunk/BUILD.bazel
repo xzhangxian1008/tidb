@@ -60,6 +60,7 @@ go_test(
         "pool_test.go",
         "row_container_test.go",
         "row_in_disk_test.go",
+        "row_test.go",
     ],
     embed = [":chunk"],
     flaky = True,
