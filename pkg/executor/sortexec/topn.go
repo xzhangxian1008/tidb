@@ -488,16 +488,23 @@ func (e *TopNExec) findEndIdx(chk *chunk.Chunk) (int, error) {
 		return rowCnt, nil
 	}
 
-	for ; idx < rowCnt; idx++ {
-		currentPrefixKeys, err := e.getPrefixKeys(chk.GetRow(idx))
+	// Rows in the input chunk are ordered by the same sort key.
+	// So rows with the same truncate key are contiguous and we can
+	// binary search the first row whose truncate key differs.
+	left, right := idx, rowCnt
+	for left < right {
+		mid := left + (right-left)/2
+		currentPrefixKeys, err := e.getPrefixKeys(chk.GetRow(mid))
 		if err != nil {
 			return 0, err
 		}
-		if !slices.Equal(currentPrefixKeys, e.prevTruncateKeys) {
-			return idx, nil
+		if slices.Equal(currentPrefixKeys, e.prevTruncateKeys) {
+			left = mid + 1
+		} else {
+			right = mid
 		}
 	}
-	return idx, nil
+	return left, nil
 }
 
 const topNCompactionFactor = 4
