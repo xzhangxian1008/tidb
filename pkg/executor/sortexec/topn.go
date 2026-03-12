@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/tidb/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/channel"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	"github.com/pingcap/tidb/pkg/util/codec"
 	"github.com/pingcap/tidb/pkg/util/collate"
 	"github.com/pingcap/tidb/pkg/util/disk"
 	"github.com/pingcap/tidb/pkg/util/hack"
@@ -430,11 +431,7 @@ func (e *TopNExec) getPrefixKeys(row chunk.Row) ([]truncateKey, error) {
 			continue
 		}
 		if e.TruncateKeyPrefixCharCounts[i] == -1 {
-			bytes, err := row.SerializeToBytesForOneColumn(
-				e.typeCtx,
-				e.truncateFieldTypes[i],
-				e.truncateKeyColIdxs[i],
-				e.truncateFieldCollators[i])
+			_, bytes, err := codec.EncodeHashChunkRowIdx(e.typeCtx, row, e.truncateFieldTypes[i], e.truncateKeyColIdxs[i])
 			if err != nil {
 				return nil, err
 			}
