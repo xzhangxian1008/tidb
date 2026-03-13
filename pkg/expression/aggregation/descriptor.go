@@ -154,9 +154,10 @@ func (a *AggFuncDesc) Clone() *AggFuncDesc {
 // ordinal indicates the column ordinal of the intermediate result.
 func (a *AggFuncDesc) Split(ordinal []int) (partialAggDesc, finalAggDesc *AggFuncDesc) {
 	partialAggDesc = a.Clone()
-	if a.Mode == CompleteMode {
+	switch a.Mode {
+	case CompleteMode:
 		partialAggDesc.Mode = Partial1Mode
-	} else if a.Mode == FinalMode {
+	case FinalMode:
 		partialAggDesc.Mode = Partial2Mode
 	}
 	finalAggDesc = &AggFuncDesc{
@@ -172,12 +173,10 @@ func (a *AggFuncDesc) Split(ordinal []int) (partialAggDesc, finalAggDesc *AggFun
 			Index:   ordinal[0],
 			RetType: types.NewFieldType(mysql.TypeLonglong),
 		})
-		if !a.HasDistinct {
-			args = append(args, &expression.Column{
-				Index:   ordinal[1],
-				RetType: a.RetTp,
-			})
-		}
+		args = append(args, &expression.Column{
+			Index:   ordinal[1],
+			RetType: a.RetTp,
+		})
 		finalAggDesc.Args = args
 	case ast.AggFuncApproxCountDistinct:
 		args := make([]expression.Expression, 0, 1)
@@ -187,20 +186,14 @@ func (a *AggFuncDesc) Split(ordinal []int) (partialAggDesc, finalAggDesc *AggFun
 		})
 		finalAggDesc.Args = args
 	default:
-		// TODO refine it
-		if a.HasDistinct {
-			// TODO can we delete it? It seems that it's useless.
-			finalAggDesc.Args = partialAggDesc.Args
-		} else {
-			args := make([]expression.Expression, 0, 1)
-			args = append(args, &expression.Column{
-				Index:   ordinal[0],
-				RetType: a.RetTp,
-			})
-			finalAggDesc.Args = args
-			if finalAggDesc.Name == ast.AggFuncGroupConcat || finalAggDesc.Name == ast.AggFuncApproxPercentile {
-				finalAggDesc.Args = append(finalAggDesc.Args, a.Args[len(a.Args)-1]) // separator
-			}
+		args := make([]expression.Expression, 0, 1)
+		args = append(args, &expression.Column{
+			Index:   ordinal[0],
+			RetType: a.RetTp,
+		})
+		finalAggDesc.Args = args
+		if finalAggDesc.Name == ast.AggFuncGroupConcat || finalAggDesc.Name == ast.AggFuncApproxPercentile {
+			finalAggDesc.Args = append(finalAggDesc.Args, a.Args[len(a.Args)-1]) // separator
 		}
 	}
 	return

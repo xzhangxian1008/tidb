@@ -334,7 +334,7 @@ func (e *groupPartialConcatDistinct) MergePartialResult(_ AggFuncUpdateContext, 
 			continue
 		}
 
-		memDelta += d.valSet.Insert(key, val) + int64(len(e.sep)+len(key)+len(val))
+		memDelta += d.valSet.Insert(key, val) + int64(len(key)+len(val))
 	}
 
 	return memDelta, nil
