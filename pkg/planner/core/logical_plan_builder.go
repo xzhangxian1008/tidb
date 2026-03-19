@@ -5430,6 +5430,23 @@ func buildColumns2HandleWithWrtiableColumns(
 	return cols2Handles, nil
 }
 
+// buildUpdateTblColPosInfos resolves the handle columns against the current UPDATE input schema and
+// rebuilds the alias/range-scoped writable-column layout for that schema. buildUpdate uses it on
+// both the frozen pre-optimize input and the final optimized input because the surviving column
+// ordinals may change after pruning and optimization.
+func buildUpdateTblColPosInfos(
+	schema *expression.Schema,
+	names []*types.FieldName,
+	tblID2Handle map[int64][]util.HandleCols,
+	tblID2Table map[int64]table.Table,
+) (physicalop.TblColPosInfoSlice, error) {
+	resolvedTblID2Handle, err := resolveIndicesForTblID2Handle(tblID2Handle, schema)
+	if err != nil {
+		return nil, err
+	}
+	return buildColumns2HandleWithWrtiableColumns(names, resolvedTblID2Handle, tblID2Table)
+}
+
 // pruneAndBuildColPositionInfoForDelete prune unneeded columns and construct the column position information.
 // We'll have two kinds of columns seen by DELETE:
 //  1. The columns that are public. They are the columns that not affected by any DDL.
@@ -5719,6 +5736,83 @@ func (b *PlanBuilder) buildUpdate(ctx context.Context, update *ast.UpdateStmt) (
 		return nil, err
 	}
 	p = np
+	rawTblID2Handle := b.handleHelper.tailMap()
+	if len(rawTblID2Handle) == 0 {
+		return nil, plannererrors.ErrPrivilegeCheckFail.GenWithStackByArgs("UPDATE")
+	}
+	tblID2table := make(map[int64]table.Table, len(rawTblID2Handle))
+	for id := range rawTblID2Handle {
+		tblID2table[id], _ = b.is.TableByID(ctx, id)
+	}
+
+	// Identify updated aliases and add a projection to prune read-only columns,
+	// enabling covering index usage on read-only join inputs.
+	//
+	// UPDATE needs the full writable row layout only for updated aliases/ranges. Read-only join
+	// inputs can be pruned down to assignment-source columns so covering indexes remain available.
+	// The matching stays alias/range-scoped for self-joins, uses schema.ColumnIndex(assign.Col).
+	updatedAliases := make(map[string]struct{})
+	for _, assign := range orderedList {
+		if idx := p.Schema().ColumnIndex(assign.Col); idx >= 0 {
+			updatedAliases[p.OutputNames()[idx].TblName.L] = struct{}{}
+		}
+	}
+
+	// Filter tblID2Handle to include only aliases that are actually updated.
+	// This ensures the executor only attempts to write back to the tables targeted by the SET list.
+	finalTblID2Handle := make(map[int64][]util.HandleCols)
+	for tid, handleCols := range rawTblID2Handle {
+		for _, hc := range handleCols {
+			if idx := p.Schema().ColumnIndex(hc.GetCol(0)); idx >= 0 {
+				if _, ok := updatedAliases[p.OutputNames()[idx].TblName.L]; ok {
+					finalTblID2Handle[tid] = append(finalTblID2Handle[tid], hc)
+				}
+			}
+		}
+	}
+
+	// Drop read-only columns from the frozen projection so covering indexes remain available.
+	// We need all columns of updated aliases plus any column referenced in SET expressions.
+	// Assignment expressions may read columns from otherwise read-only join inputs, so keep
+	// any source column that was referenced while building the update plan.
+	used := bitset.New(uint(p.Schema().Len()))
+	colRef := b.ctx.GetSessionVars().StmtCtx.ColRefFromUpdatePlan
+	for i, col := range p.Schema().Columns {
+		if _, ok := updatedAliases[p.OutputNames()[i].TblName.L]; ok || colRef.Has(int(col.UniqueID)) {
+			used.Set(uint(i))
+		}
+	}
+
+	if used.Count() < uint(p.Schema().Len()) {
+		proj, isProj := p.(*logicalop.LogicalProjection)
+		projExprs := make([]expression.Expression, 0, used.Count())
+		projSchema := make([]*expression.Column, 0, used.Count())
+		projNames := make(types.NameSlice, 0, used.Count())
+		for i, found := used.NextSet(0); found; i, found = used.NextSet(i + 1) {
+			if isProj {
+				projExprs = append(projExprs, proj.Exprs[i])
+			} else {
+				projExprs = append(projExprs, p.Schema().Columns[i])
+			}
+			projSchema = append(projSchema, p.Schema().Columns[i])
+			projNames = append(projNames, p.OutputNames()[i])
+		}
+		if isProj {
+			// Reuse the existing top projection when the current UPDATE input is already
+			// materialized by a projection, instead of stacking another projection above it.
+			proj.Exprs = projExprs
+			proj.SetSchema(expression.NewSchema(projSchema...))
+			proj.SetOutputNames(projNames)
+		} else {
+			// Build a projection to compact the mixed join row down to only the columns needed by the
+			// final update executor, preserving the original order of the surviving slots.
+			newProj := logicalop.LogicalProjection{Exprs: projExprs}.Init(b.ctx, b.getSelectOffset())
+			newProj.SetChildren(p)
+			newProj.SetSchema(expression.NewSchema(projSchema...))
+			newProj.SetOutputNames(projNames)
+			p = newProj
+		}
+	}
 
 	updt := physicalop.Update{
 		OrderedList:               orderedList,
@@ -5737,15 +5831,7 @@ func (b *PlanBuilder) buildUpdate(ctx context.Context, update *ast.UpdateStmt) (
 	if err != nil {
 		return nil, err
 	}
-	tblID2Handle, err := resolveIndicesForTblID2Handle(b.handleHelper.tailMap(), updt.SelectPlan.Schema())
-	if err != nil {
-		return nil, err
-	}
-	tblID2table := make(map[int64]table.Table, len(tblID2Handle))
-	for id := range tblID2Handle {
-		tblID2table[id], _ = b.is.TableByID(ctx, id)
-	}
-	updt.TblColPosInfos, err = buildColumns2HandleWithWrtiableColumns(updt.OutputNames(), tblID2Handle, tblID2table)
+	updt.TblColPosInfos, err = buildUpdateTblColPosInfos(updt.SelectPlan.Schema(), updt.OutputNames(), finalTblID2Handle, tblID2table)
 	if err != nil {
 		return nil, err
 	}
@@ -5933,6 +6019,9 @@ func (b *PlanBuilder) buildUpdateLists(ctx context.Context, tableList []*ast.Tab
 		}
 		col := p.Schema().Columns[idx]
 		name := p.OutputNames()[idx]
+		if col.ID == model.ExtraHandleID && !b.ctx.GetSessionVars().AllowWriteRowID {
+			return nil, nil, false, errors.Errorf("insert, update and replace statements for _tidb_rowid are not supported")
+		}
 		var newExpr expression.Expression
 		var np base.LogicalPlan
 		if i < len(list) {
