@@ -116,6 +116,7 @@ const (
 		Password_expired		ENUM('N','Y') NOT NULL DEFAULT 'N',
 		Password_last_changed	TIMESTAMP DEFAULT CURRENT_TIMESTAMP(),
 		Password_lifetime		SMALLINT UNSIGNED DEFAULT NULL,
+		Max_user_connections 	INT UNSIGNED NOT NULL DEFAULT 0,
 		PRIMARY KEY (Host, User),
 		KEY i_user (User));`
 	// CreateGlobalPrivTable is the SQL statement creates Global scope privilege table in system db.
@@ -1283,8 +1284,12 @@ const (
 	// introduced. Use tidb_distsql_scan_concurrency to preserve old analyze behavior.
 	version229 = 229
 
+	// version 230
+	// Add Max_user_connections to mysql.user.
+	version230 = 230
+
 	// ...
-	// [version230, version238] is the version range reserved for patches of 8.5.x
+	// [version231, version238] is the version range reserved for patches of 8.5.x
 	// ...
 	// next version should start with 239
 
@@ -1292,7 +1297,7 @@ const (
 
 // currentBootstrapVersion is defined as a variable, so we can modify its value for testing.
 // please make sure this is the largest version
-var currentBootstrapVersion int64 = version229
+var currentBootstrapVersion int64 = version230
 
 // DDL owner key's expired time is ManagerSessionTTL seconds, we should wait the time and give more time to have a chance to finish it.
 var internalSQLTimeout = owner.ManagerSessionTTL + 15
@@ -1477,6 +1482,7 @@ var (
 		upgradeToVer227,
 		upgradeToVer228,
 		upgradeToVer229,
+		upgradeToVer230,
 	}
 )
 
@@ -3438,6 +3444,14 @@ func upgradeToVer229(s sessiontypes.Session, ver int64) {
 		return
 	}
 	initGlobalVariableIfNotExists(s, variable.TiDBAnalyzeDistSQLScanConcurrency, rows[0].GetString(0))
+}
+
+func upgradeToVer230(s sessiontypes.Session, ver int64) {
+	if ver >= version230 {
+		return
+	}
+
+	doReentrantDDL(s, "ALTER TABLE mysql.user ADD COLUMN IF NOT EXISTS `Max_user_connections` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `Password_lifetime`")
 }
 
 func getPrimaryKeyColsOrEmpty(s sessiontypes.Session, dbName, tableName string) []string {
