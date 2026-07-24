@@ -52,6 +52,7 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/codec"
 	"github.com/pingcap/tidb/pkg/util/collate"
+	"github.com/pingcap/tidb/pkg/util/dbterror/plannererrors"
 	h "github.com/pingcap/tidb/pkg/util/hint"
 	"github.com/pingcap/tidb/pkg/util/intest"
 	"github.com/pingcap/tidb/pkg/util/logutil"
@@ -1865,6 +1866,15 @@ func isPointGetConvertableSchema(ds *logicalop.DataSource) bool {
 	return true
 }
 
+func accessExtraCommitTSColumn(ds *logicalop.DataSource) bool {
+	for _, col := range ds.Schema().Columns {
+		if col.ID == model.ExtraCommitTSID {
+			return true
+		}
+	}
+	return false
+}
+
 // exploreEnforcedPlan determines whether to explore enforced plans for this DataSource if it has already found an unenforced plan.
 // See #46177 for more information.
 func exploreEnforcedPlan(ds *logicalop.DataSource) bool {
@@ -1990,6 +2000,7 @@ func findBestTask4LogicalDataSource(super base.LogicalPlan, prop *property.Physi
 	t = base.InvalidTask
 	candidates := skylinePruning(ds, prop)
 	pruningInfo := getPruningInfo(ds, candidates, prop)
+	accessCommitTSCol := accessExtraCommitTSColumn(ds)
 	defer func() {
 		if err == nil && t != nil && !t.Invalid() && pruningInfo != "" {
 			warnErr := errors.NewNoStackError(pruningInfo)
@@ -2038,7 +2049,8 @@ func findBestTask4LogicalDataSource(super base.LogicalPlan, prop *property.Physi
 			return t, nil
 		}
 
-		canConvertPointGet := len(path.Ranges) > 0 && path.StoreType == kv.TiKV && isPointGetConvertableSchema(ds)
+		canConvertPointGet := len(path.Ranges) > 0 && path.StoreType == kv.TiKV &&
+			isPointGetConvertableSchema(ds) && !accessCommitTSCol
 		if fixcontrol.GetBoolWithDefault(ds.SCtx().GetSessionVars().OptimizerFixControl, fixcontrol.Fix52592, false) {
 			canConvertPointGet = false
 		}
@@ -2126,11 +2138,12 @@ func findBestTask4LogicalDataSource(super base.LogicalPlan, prop *property.Physi
 		}
 		if path.IsTablePath() {
 			// prefer tiflash, while current table path is tikv, skip it.
-			if ds.PreferStoreType&h.PreferTiFlash != 0 && path.StoreType == kv.TiKV {
+			// TiFlash does not support _tidb_commit_ts, so keep the TiKV TableScan path even when TiFlash is preferred.
+			if ds.PreferStoreType&h.PreferTiFlash != 0 && path.StoreType == kv.TiKV && !accessCommitTSCol {
 				continue
 			}
 			// prefer tikv, while current table path is tiflash, skip it.
-			if ds.PreferStoreType&h.PreferTiKV != 0 && path.StoreType == kv.TiFlash {
+			if (ds.PreferStoreType&h.PreferTiKV != 0 || accessCommitTSCol) && path.StoreType == kv.TiFlash {
 				continue
 			}
 			if !ds.HasTiFlash() && path.StoreType == kv.TiFlash {
@@ -2810,6 +2823,10 @@ func convertToTableScan(ds *logicalop.DataSource, prop *property.PhysicalPropert
 
 func convertToSampleTable(ds *logicalop.DataSource, prop *property.PhysicalProperty,
 	candidate *candidatePath) (base.Task, error) {
+	if accessExtraCommitTSColumn(ds) {
+		return base.InvalidTask, plannererrors.ErrInternal.GenWithStack("Usage of column name '%s' is not supported for TABLESAMPLE",
+			model.ExtraCommitTSName.O)
+	}
 	if prop.TaskTp == property.CopMultiReadTaskType {
 		return base.InvalidTask, nil
 	}

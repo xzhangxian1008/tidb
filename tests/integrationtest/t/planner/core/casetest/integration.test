@@ -731,12 +731,16 @@ SET @b = NULL;
 PREPARE prepare_query FROM 'SELECT * FROM test_62564 WHERE CAST((CASE test_62564.c0 WHEN test_62564.c0 THEN CAST(test_62564.c0 AS TIME) ELSE ? END ) AS DATE)';
 EXECUTE prepare_query USING @b;
 
-# Test temporary handling of _tidb_commit_ts
+# Test TableScan access to _tidb_commit_ts
 CREATE TABLE t_commit_ts (a INT PRIMARY KEY, b INT);
+INSERT INTO t_commit_ts VALUES (1, 1);
+explain format = 'plan_tree' select _tidb_commit_ts from t_commit_ts where a = 1;
+explain format = 'plan_tree' select _tidb_commit_ts from t_commit_ts where a in (1, 2);
+select _tidb_commit_ts > 0 as valid_commit_ts from t_commit_ts where a = 1;
+select a from t_commit_ts where _tidb_commit_ts > 0;
+select _tidb_commit_ts > 0 as valid_commit_ts from t_commit_ts union all select _tidb_commit_ts > 0 from t_commit_ts;
 -- error 1815
-select _tidb_commit_ts from t_commit_ts where a = 1;
--- error 1815
-select _tidb_commit_ts from t_commit_ts where _tidb_commit_ts = 1;
+select _tidb_commit_ts from t_commit_ts tablesample regions();
 -- error 1815
 delete from t_commit_ts where _tidb_commit_ts = 1;
 -- error 1815

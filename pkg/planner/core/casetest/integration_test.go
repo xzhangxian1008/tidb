@@ -346,6 +346,15 @@ func TestTiFlashExtraColumnPrune(t *testing.T) {
 			})
 			tk.MustQuery(tt).Check(testkit.Rows(output[i].Plan...))
 		}
+
+		tk.MustExec("set @@tidb_enforce_mpp = off")
+		tk.MustExec("set @@tidb_isolation_read_engines = 'tikv,tiflash'")
+		sql := "select _tidb_commit_ts from t1"
+		tk.MustHavePlan(sql, "TableFullScan")
+		require.False(t, tk.HasTiFlashPlan(sql))
+
+		tk.MustExec("set @@tidb_isolation_read_engines = 'tiflash'")
+		require.Error(t, tk.ExecToErr(sql))
 	})
 }
 
