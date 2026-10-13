@@ -49,6 +49,19 @@ func InjectExtraProjection(plan base.PhysicalPlan) base.PhysicalPlan {
 type projInjector struct {
 }
 
+// equalExprForProjection compares expressions while accounting for column
+// references decoded from a coprocessor DAG. PB column references do not carry
+// a plan UniqueID, so all of them have UniqueID == 0. Their input position is
+// the identity that must be used while deduplicating projection expressions.
+func equalExprForProjection(ctx expression.EvalContext, lhs, rhs expression.Expression) bool {
+	lhsCol, lhsOK := lhs.(*expression.Column)
+	rhsCol, rhsOK := rhs.(*expression.Column)
+	if lhsOK && rhsOK && lhsCol.UniqueID == 0 && rhsCol.UniqueID == 0 {
+		return lhsCol.Index == rhsCol.Index
+	}
+	return lhs.Equal(ctx, rhs)
+}
+
 // NewProjInjector builds a projInjector.
 func NewProjInjector() *projInjector {
 	return &projInjector{}
@@ -164,7 +177,7 @@ func InjectProjBelowAgg(aggPlan base.PhysicalPlan, aggFuncs []*aggregation.AggFu
 				continue
 			}
 			idx := slices.IndexFunc(projExprs, func(a expression.Expression) bool {
-				return a.Equal(ectx, bi)
+				return equalExprForProjection(ectx, a, bi)
 			})
 			if idx < 0 {
 				projExprs = append(projExprs, bi)
@@ -188,7 +201,7 @@ func InjectProjBelowAgg(aggPlan base.PhysicalPlan, aggFuncs []*aggregation.AggFu
 			continue
 		}
 		idx := slices.IndexFunc(projExprs, func(a expression.Expression) bool {
-			return a.Equal(ectx, it)
+			return equalExprForProjection(ectx, a, it)
 		})
 		if idx < 0 {
 			projExprs = append(projExprs, it)
